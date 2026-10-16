@@ -42,7 +42,7 @@ def explain_findings(findings):
         "stream": False,
         "options": {
             "temperature": 0.2,
-            "num_predict": 140
+            "num_predict": 400
         },
         "keep_alive": "10m"
     }
