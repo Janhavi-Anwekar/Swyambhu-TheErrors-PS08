@@ -18,7 +18,7 @@ An AI-assisted configuration drift detection platform that identifies servers wh
 - **Programming Language:** Python
 - **Dashboard:** Streamlit
 - **Local AI Runtime:** Ollama
-- **AI Model:** Qwen3 4B (or a supported fallback model)
+- **AI Model:** Qwen2.5 3B (`qwen2.5:3b`)
 - **Configuration Data:** JSON and other explicitly supported configuration formats
 - **Testing:** Python testing tools
 
@@ -59,16 +59,10 @@ python -m pip install -r requirements.txt
 
 ### Download the AI Model
 
-For the primary model:
+Download the model used by the application:
 
 ```bash
-ollama pull qwen3:4b
-```
-
-Optional smaller fallback model:
-
-```bash
-ollama pull qwen3:1.7b
+ollama pull qwen2.5:3b
 ```
 
 Confirm that the model is available:
@@ -77,7 +71,7 @@ Confirm that the model is available:
 ollama list
 ```
 
-The fallback model must also be configured in the application if the code is expected to use it automatically.
+The model identifier configured in the application must match the model installed in Ollama.
 
 ## Run the Application
 
@@ -88,6 +82,8 @@ streamlit run app/app.py
 ```
 
 Streamlit will display a local URL in the terminal. Open that URL in your browser to access the dashboard.
+
+> Ensure the application path matches the actual location of `app.py` in your repository.
 
 ## How It Works
 
@@ -125,22 +121,26 @@ config-drift-detector/
 └── README.md
 ```
 
-This is the intended project structure. Update the tree to reflect the files actually present in the repository.
+This is an illustrative project structure. Update it to reflect the files and directories actually present in the repository.
 
 ## AI Model
 
-- **Model:** Qwen3 4B
+- **Model Provider:** Alibaba Cloud (Qwen)
+- **Model:** Qwen2.5 3B
+- **Model Identifier:** `qwen2.5:3b`
 - **Runtime:** Ollama
 - **Execution:** Locally on the user's machine
-- **Parameters:** Approximately 4 billion
-- **Fallback:** Qwen3 1.7B, if configured and supported by the application
-- **Model License:** Verify the exact model's license on its official model page before redistribution or deployment.
+- **Parameters:** Approximately 3 billion
+- **Model License:** Refer to the official model repository and model-provider terms for the applicable license.
 
-Official references:
+### Official Model and License References
 
-- Ollama: https://ollama.com/
-- Qwen3 4B: https://ollama.com/library/qwen3:4b
-- Qwen3 1.7B: https://ollama.com/library/qwen3:1.7b
+- **Ollama:** https://ollama.com/
+- **Qwen2.5 3B on Ollama:** https://ollama.com/library/qwen2.5:3b
+- **Qwen2.5 Official Repository and License:** https://github.com/QwenLM/Qwen2.5
+- **Qwen Model Provider:** https://qwen.ai/
+
+The AI model is a third-party component and is licensed separately from this project's source code. Review the applicable model license and terms of use before redistribution or deployment.
 
 ## Security Considerations
 
@@ -209,8 +209,10 @@ Avoid modifying the same files as another team member without coordinating first
 
 ## Contributions
 
-Contributions are welcome. Please use feature branches, test changes before submitting them, and describe the purpose and behavior of your changes in the pull request.
+Contributions are welcome. Please use feature branches, test changes before submitting them, and describe the purpose and behavior of the changes in the pull request.
 
 ## License
 
 This project is licensed under the MIT License. See the `LICENSE` file for details.
+
+The project's MIT license applies to the project code covered by that license, not automatically to third-party AI models or dependencies.

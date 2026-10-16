@@ -2,7 +2,7 @@
 
 Port 22   # standard port
 PermitRootLogin yes
-PasswordAuthentication yes
+PasswordAuthentication no
 PubkeyAuthentication yes
 # PermitEmptyPasswords is missing on purpose
 MaxAuthTries 6

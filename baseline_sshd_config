@@ -3,7 +3,7 @@ Port 22
 PermitRootLogin no
 PasswordAuthentication no
 PubkeyAuthentication yes
-PermitEmptyPasswords no
+# PermitEmptyPasswords no
 MaxAuthTries 4
 StrictModes yes
 X11Forwarding no
