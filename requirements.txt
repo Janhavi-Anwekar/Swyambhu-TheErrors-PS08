@@ -1,5 +1,2 @@
 streamlit>=1.50
-anthropic
-streamlit
-requests
 pytest

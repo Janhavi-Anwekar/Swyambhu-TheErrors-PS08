@@ -1,16 +1,21 @@
 """AI explanation layer. The AI only EXPLAINS findings that rules already found.
 
-Uses the Anthropic API when ANTHROPIC_API_KEY is set; otherwise (or on any error) it falls
-back to pre-written offline text so the demo never breaks. To use another provider
-(OpenAI, Gemini...), change only _ask_llm().
+The AI call is the backend's ai_explainer.explain_findings() (local Ollama model). If Ollama is
+not running, the model is missing, or the reply is unusable, the pre-written offline text is
+used instead, so the demo never breaks.
 """
 import json
-import os
 import re
+import urllib.request
 
-MODEL = "claude-sonnet-5-5"
+from ai_explainer import MODEL_NAME, OLLAMA_URL, explain_findings
+
 PORT_NAMES = {22: "SSH", 23: "Telnet", 80: "HTTP", 443: "HTTPS", 3306: "MySQL",
               5432: "PostgreSQL", 6379: "Redis", 8080: "alternate HTTP", 27017: "MongoDB"}
+
+# explain_findings() returns one of these messages (instead of raising) when the AI fails.
+AI_FAILED = ("AI explanation is temporarily unavailable", "Unexpected response from Ollama",
+             "AI returned an empty explanation", "No configuration differences")
 
 OFFLINE = {
     "firewall_enabled": (
@@ -41,7 +46,15 @@ OFFLINE = {
         "Telnet sends everything, including passwords, in plain text.",
         "Anyone on the network path can read credentials.",
         "Disable and remove the telnet service and use SSH instead."),
+    "logging_enabled": (
+        "Security logging records who did what on the server. Without it, attacks and mistakes leave no trace.",
+        "Incidents become hard to detect and investigate, and audit requirements may not be met.",
+        "Turn security logging back on and confirm that log files are being written."),
 }
+# the same advice applies to the matching names used elsewhere in the project
+OFFLINE["security_updates"] = OFFLINE["auto_updates"]
+OFFLINE["permitrootlogin"] = OFFLINE["ssh_root_login"]
+OFFLINE["passwordauthentication"] = OFFLINE["ssh_password_login"]
 
 
 def offline_explanation(f: dict) -> dict:
@@ -65,38 +78,37 @@ def offline_explanation(f: dict) -> dict:
     if f["type"] == "added":
         why = "This setting is not in the approved baseline. " + why
     return {"why_it_matters": why, "impact": impact, "suggested_fix": fix,
-            "source": "Offline text (demo)"}
+            "source": "Offline text (demo)", "ai_text": ""}
 
 
-def _ask_llm(prompt: str) -> str:
-    import anthropic
-    r = anthropic.Anthropic().messages.create(
-        model=MODEL, max_tokens=500, messages=[{"role": "user", "content": prompt}])
-    return r.content[0].text
+def ollama_ready() -> bool:
+    """True if Ollama is running and has the model the backend uses. Takes at most ~1.5 seconds."""
+    try:
+        base = OLLAMA_URL.split("/api/")[0]
+        with urllib.request.urlopen(base + "/api/tags", timeout=1.5) as r:
+            names = [m.get("name", "") for m in json.load(r).get("models", [])]
+        return any(n.startswith(MODEL_NAME) for n in names)
+    except Exception:
+        return False
 
 
 def explain(f: dict, use_ai: bool = True) -> dict:
-    """f = one finding already detected and rated by code."""
-    if not use_ai or not os.getenv("ANTHROPIC_API_KEY"):
-        return offline_explanation(f)
-    prompt = f"""A server's configuration drifted from its approved baseline.
-Setting: {f['setting']}
-Change type: {f['type']}
-Expected: {f['expected']}
-Actual: {f['actual']}
-Risk level (set by rules): {f['risk']}
-
-Reply with ONLY JSON with three keys:
-"why_it_matters": 1-2 plain-language sentences on the danger
-"impact": 1 sentence on what could happen
-"suggested_fix": the safe step(s) to restore the expected value
-Use only the facts above. Do not invent other problems."""
-    try:
-        text = re.sub(r"^```(?:json)?|```$", "", _ask_llm(prompt).strip(), flags=re.M).strip()
-        d = json.loads(text)
-        return {"why_it_matters": d["why_it_matters"], "impact": d["impact"],
-                "suggested_fix": d["suggested_fix"], "source": "AI-generated"}
-    except Exception as e:  # network, key, parse errors -> keep the demo alive
-        out = offline_explanation(f)
-        out["source"] = f"Offline text (AI error: {type(e).__name__})"
+    """f = one finding already detected and rated by code. Always returns the offline text; when the
+    local AI answers, its text is added as "ai_text"."""
+    out = offline_explanation(f)
+    if not use_ai:
         return out
+    finding = {"setting": f["setting"],
+               "expected": "NOT DEFINED" if f["type"] == "added" else f["expected"],
+               "actual": "MISSING" if f["type"] == "removed" else f["actual"],
+               "level": f["risk"].upper(), "reason": f.get("reason", "")}
+    if f.get("score") is not None:
+        finding["score"] = f["score"]
+    text = explain_findings([finding])                       # backend call (Ollama)
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S).strip()
+    if not text or text.startswith(AI_FAILED):
+        out["source"] = "Offline text (AI unavailable)"
+        return out
+    out["ai_text"] = text
+    out["source"] = f"AI-generated ({MODEL_NAME} via Ollama)"
+    return out

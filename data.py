@@ -1,6 +1,17 @@
-"""Mock data. Replace with a database / API / uploaded files in a real deployment."""
+"""Server data: the 6 mock servers (demo fleet) plus real files read with the backend's parser.
+
+Replace with a database / API in a real deployment.
+"""
 import copy
+import json
+import os
+import tempfile
 from datetime import datetime, timedelta
+from pathlib import Path
+
+from ssh_parser import parse_ssh_config   # backend: reads an sshd_config file -> dict of settings
+
+ROOT = Path(__file__).parent
 
 BASE = {
     "firewall_enabled": True, "ssh_password_login": False, "ssh_root_login": False,
@@ -56,3 +67,55 @@ def get_mock_history() -> list[dict]:
     rows = [(5, 6, 2), (4, 8, 3), (3, 11, 5), (2, 15, 8), (1, 14, 7)]
     return [dict(id=f"scan-{d}", time=now - timedelta(days=d), servers=6, drifts=n, high=h)
             for d, n, h in rows]
+
+
+# ---------------------------------------------------------------- real files (backend sample data)
+def _server(sid: str, name: str, location: str, baseline: dict, current: dict) -> dict:
+    return dict(id=sid, name=name, environment="dev", os="Not specified", location=location,
+                status="online", last_scan=datetime.now(), baseline=baseline, current=current)
+
+
+def get_backend_servers() -> list[dict]:
+    """Servers built from the backend's own files. A missing or broken file is skipped, not fatal."""
+    out = []
+    try:
+        base = json.loads((ROOT / "baseline.json").read_text(encoding="utf-8"))
+        cur = json.loads((ROOT / "current.json").read_text(encoding="utf-8"))
+        out.append(_server("sample-json", "sample-json-config", "baseline.json / current.json", base, cur))
+    except Exception:
+        pass
+    try:
+        base, _ = parse_ssh_config(str(ROOT / "baseline_sshd_config"))
+        cur, _ = parse_ssh_config(str(ROOT / "current_sshd_config"))
+        out.append(_server("sample-ssh", "sample-ssh-config", "baseline_sshd_config / current_sshd_config",
+                           base, cur))
+    except Exception:
+        pass
+    return out
+
+
+def parse_uploaded(raw: bytes) -> dict:
+    """An uploaded file -> flat dict of settings. JSON objects as-is; anything else goes through
+    the backend's sshd_config parser. Raises ValueError with a message the user can act on."""
+    text = raw.decode("utf-8-sig", errors="replace")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        if text.lstrip().startswith(("{", "[")):
+            raise ValueError("One of the files looks like JSON but is not valid. "
+                             "Check for missing commas or quotes and try again.")
+        data = None
+    if data is not None:
+        if not isinstance(data, dict):
+            raise ValueError('JSON files must contain an object of settings, e.g. {"firewall_enabled": true}.')
+        return data
+    with tempfile.NamedTemporaryFile("w", suffix=".conf", delete=False, encoding="utf-8") as tmp:
+        tmp.write(text)
+        path = tmp.name
+    try:
+        settings, _warnings = parse_ssh_config(path)
+    finally:
+        os.remove(path)
+    if not settings:
+        raise ValueError("No settings found. Upload a JSON object or an sshd_config style file.")
+    return settings

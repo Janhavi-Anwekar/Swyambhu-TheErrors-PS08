@@ -4,6 +4,7 @@ Run:  streamlit run app.py
 Files: core.py (logic) · data.py (mock data) · explain.py (AI) · ui.py (HTML/CSS helpers)
 """
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -12,8 +13,8 @@ import streamlit.components.v1 as components
 
 from core import (RISK_ORDER, TYPE_LABEL, analyze, f_actual, f_expected, history_points, label,
                   report_csv, report_data, summary, totals)
-from data import get_mock_history, get_mock_servers
-from explain import explain
+from data import get_backend_servers, get_mock_history, get_mock_servers, parse_uploaded
+from explain import MODEL_NAME, explain, ollama_ready
 from ui import (BRAND, CSS, DOT, FOOTER, SIDE_NOTE, chip, donut, empty, empty_clean, esc, finding_chips,
                 fmt_date, kpi, page_head, raw_json, rich, ring, risk_badge, stacked_bar, status_badge,
                 status_dot, time_ago, trend, type_badge)
@@ -55,13 +56,14 @@ if "ready" not in ss:
     qp_page = st.query_params.get("page", "overview")
     ss.page = qp_page if qp_page in PAGES else "overview"
     ss.sid = st.query_params.get("sid")
-    ss.servers = get_mock_servers()
+    ss.servers = get_mock_servers() + get_backend_servers()   # delete the mock part for real data only
     ss.history = get_mock_history()
     ss.uploaded = None
     ss.decisions = load_decisions()
     ss.last_run = datetime.now()
     ss.review_id = None
     ss.upload_msg = ""
+    ss.expl = {}               # AI explanations already received (offline fallbacks are never cached)
 
 
 def go(page: str, sid: str | None = None):
@@ -103,6 +105,11 @@ def decide(fid: str, status: str):
     ss.flash = msg
     ss.review_id = fid          # reopen the panel so the new state is visible
     st.rerun()
+
+
+@st.cache_data(ttl=20, show_spinner=False)
+def ai_ready() -> bool:
+    return ollama_ready()
 
 
 def dstatus(fid: str) -> str:
@@ -170,9 +177,9 @@ with st.sidebar:
                             ("reports", "Reports & History", ":material/description:")]:
         st.button(text, key=f"nav_{key}", icon=icon, on_click=go, args=(key,))
     H(SIDE_NOTE)
-    import os
-    live = bool(os.getenv("ANTHROPIC_API_KEY"))
-    H('<div class="side-ai">Explanations: ' + ("<b>live AI</b>" if live else "offline demo text. Set ANTHROPIC_API_KEY for live AI.") + "</div>")
+    live = ai_ready()
+    H('<div class="side-ai">Explanations: ' + (f"<b>live AI</b> ({esc(MODEL_NAME)}, local)" if live else
+      f"offline text. Start Ollama and run: ollama pull {esc(MODEL_NAME)}") + "</div>")
 
 # ================================================================= top bar
 with st.container(key="topbar"):
@@ -256,15 +263,12 @@ def matches(s: dict, q: str) -> bool:
 def do_upload():
     a, b = ss.get("up_base"), ss.get("up_cur")
     if not a or not b:
-        ss.upload_msg = "Please choose both files: baseline.json and current.json."
+        ss.upload_msg = "Please choose both files: the approved baseline and the current one."
         return
     try:
-        base, cur = json.loads(a.getvalue()), json.loads(b.getvalue())
-    except Exception:
-        ss.upload_msg = "One of the files is not valid JSON. Check for missing commas or quotes and try again."
-        return
-    if not isinstance(base, dict) or not isinstance(cur, dict):
-        ss.upload_msg = 'Both files must contain a JSON object of settings, e.g. {"firewall_enabled": true}.'
+        base, cur = parse_uploaded(a.getvalue()), parse_uploaded(b.getvalue())
+    except ValueError as e:
+        ss.upload_msg = str(e)
         return
     ss.uploaded = dict(id="uploaded", name="uploaded-config", environment="dev", os="Not specified",
                        location="Local upload", status="unknown", last_scan=datetime.now(),
@@ -300,11 +304,11 @@ def page_servers():
     st.write("")
     with st.container(key="card_upload"):
         H('<div class="card-title" style="margin:0">Compare your own files</div>')
-        st.caption("Upload a baseline.json and a current.json (flat key/value settings) to run the same "
-                   "comparison on your data. Files stay on this machine.")
+        st.caption("Upload an approved baseline and a current file to run the same comparison on your data. "
+                   "Use two JSON files (flat key/value settings) or two sshd_config files. Files stay on this machine.")
         u1, u2, u3 = st.columns([2, 2, 1], vertical_alignment="bottom")
-        u1.file_uploader("baseline.json (approved)", type="json", key="up_base")
-        u2.file_uploader("current.json (observed)", type="json", key="up_cur")
+        u1.file_uploader("Baseline (approved)", key="up_base")
+        u2.file_uploader("Current (observed)", key="up_cur")
         u3.button("Compare files", type="primary", on_click=do_upload, key="do_upload")
         if ss.upload_msg:
             st.error(ss.upload_msg)
@@ -458,9 +462,23 @@ def page_reports():
 
 
 # ================================================================= review drawer
-@st.cache_data(show_spinner=False)
-def cached_explanation(f: dict) -> dict:
-    return explain(f)
+def get_explanation(f: dict) -> dict:
+    """Backend AI explanation, remembered for this session. Offline fallbacks are not remembered,
+    so starting Ollama later makes the next click use the AI."""
+    key = json.dumps([f["id"], f["expected"], f["actual"]], default=str)
+    if "expl" not in ss:
+        ss.expl = {}
+    if key not in ss.expl:
+        exp = explain({k: f.get(k) for k in ("setting", "type", "expected", "actual", "risk", "score", "reason")})
+        if not exp.get("ai_text"):
+            return exp
+        ss.expl[key] = exp
+    return ss.expl[key]
+
+
+def ai_html(text: str) -> str:
+    """AI text -> safe HTML: no markdown stars, line breaks kept."""
+    return rich(re.sub(r"\*\*", "", text).strip()).replace("\n", "<br>")
 
 
 @st.dialog("Finding details", width="large")
@@ -470,8 +488,8 @@ def review_dialog(fid: str):
         st.write("This finding is no longer available.")
         return
     f, s = hit
-    with st.spinner("Loading explanation…"):
-        exp = cached_explanation({k: f[k] for k in ("setting", "type", "expected", "actual", "risk")})
+    with st.spinner("Loading explanation… (the local AI can take a few seconds)"):
+        exp = get_explanation(f)
     d = ss.decisions.get(fid)
     e_chip, a_chip = finding_chips(f)
     after = '<span class="chip none">remove setting</span>' if f["type"] == "added" else e_chip
@@ -485,8 +503,12 @@ def review_dialog(fid: str):
       f'<div class="evidence"><div class="box"><div class="lbl">Now</div>{a_chip}</div><div class="arr">→</div>'
       f'<div class="box"><div class="lbl">After fix</div>{after}</div></div>'
       '<p class="hint">Proposed state only. Nothing is changed on the server.</p>'
-      f'<div class="sec">Explanation<span class="tag tag-ai">{esc(exp["source"])}</span></div>'
-      f'<div class="exp-block"><h4>Why it matters</h4><p>{rich(exp["why_it_matters"])}</p></div>'
+      + (f'<p class="hint">Rule score {f["score"]}/100. {esc(f["reason"])}</p>' if f.get("score") is not None else "")
+      + f'<div class="sec">Explanation<span class="tag tag-ai">{esc(exp["source"])}</span></div>'
+      + (f'<div class="exp-block"><h4>AI explanation</h4><p>{ai_html(exp["ai_text"])}</p></div>'
+         '<div class="sec">Standard guidance<span class="tag tag-rule">Rule-based text</span></div>'
+         if exp.get("ai_text") else "")
+      + f'<div class="exp-block"><h4>Why it matters</h4><p>{rich(exp["why_it_matters"])}</p></div>'
       f'<div class="exp-block"><h4>Impact</h4><p>{rich(exp["impact"])}</p></div>'
       f'<div class="exp-block"><h4>Suggested fix</h4><div class="fixbox">{rich(exp["suggested_fix"])}</div></div>')
     st.divider()
