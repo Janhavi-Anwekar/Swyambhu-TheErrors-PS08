@@ -1,32 +1,35 @@
-"""Config Drift Detector — Streamlit + Python version of the website.
+"""Drift — configuration comparison (Streamlit).
 
 Run:  streamlit run app.py
-Files: core.py (logic) · data.py (mock data) · explain.py (AI) · ui.py (HTML/CSS helpers)
+Files: core.py (parsing + logic) · data.py (sample data) · explain.py (AI) · ui.py (HTML/CSS)
+
+Flow: the app starts empty. Upload a CURRENT file (JSON or sshd_config). A BASELINE file is optional:
+with one, the two files are compared; without one, the current file is checked against the
+built-in standard baseline.
 """
 import json
-import re
 from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
 import streamlit.components.v1 as components
 
-from core import (RISK_ORDER, TYPE_LABEL, analyze, f_actual, f_expected, history_points, label,
-                  report_csv, report_data, summary, totals)
-from data import get_history, get_servers, parse_uploaded
-from explain import MODEL_NAME, explain, ollama_ready
-from ui import (BRAND, CSS, DOT, FOOTER, SIDE_NOTE, chip, donut, empty, empty_clean, esc, finding_chips,
-                fmt_date, kpi, page_head, raw_json, rich, ring, risk_badge, stacked_bar, status_badge,
-                status_dot, time_ago, trend, type_badge)
+from core import (RISK_ORDER, STANDARD_BASELINE, TYPE_LABEL, ConfigError, analyze, build_run, f_actual,
+                  f_expected, label, report_csv, report_data, totals)
+from data import get_mock_servers
+from explain import explain
+from ui import (BRAND, CSS, FOOTER, baseline_table, chip, empty, empty_clean, empty_state, esc, features,
+                finding_chips, fmt_date, hero, raw_json, ready_line, result_head, rich, ring,
+                risk_badge, status_badge, step_head, time_ago, trend, type_badge, verdict)
 
-st.set_page_config(page_title="Config Drift Detector", page_icon="🛡️", layout="wide",
-                   initial_sidebar_state="expanded")
+st.set_page_config(page_title="Drift · Configuration comparison", page_icon="🛡️", layout="wide",
+                   initial_sidebar_state="collapsed")
 st.markdown(f"<style>{CSS}</style>", unsafe_allow_html=True)
 
 ss = st.session_state
 DEC_FILE = Path(__file__).with_name("decisions.json")
-PAGES = {"overview": "Overview", "servers": "Servers", "remediation": "Remediation",
-         "reports": "Reports & History", "server": "Server"}
+NAV = [("compare", "Compare"), ("findings", "Findings"), ("remediation", "Remediation"), ("reports", "Reports")]
+PAGES = dict(NAV)
 
 
 def H(html: str):
@@ -53,40 +56,18 @@ def save_decisions():
 
 if "ready" not in ss:
     ss.ready = True
-    qp_page = st.query_params.get("page", "overview")
-    ss.page = qp_page if qp_page in PAGES else "overview"
-    ss.sid = st.query_params.get("sid")
-    ss.servers = get_servers()   # real files only; set USE_DEMO_DATA = True in data.py for the demo fleet
-    ss.history = get_history()
-    ss.uploaded = None
+    qp = st.query_params.get("page", "compare")
+    ss.page = qp if qp in PAGES else "compare"
+    ss.run = None            # nothing loaded: the app starts empty
+    ss.history = []
     ss.decisions = load_decisions()
-    ss.last_run = datetime.now()
     ss.review_id = None
-    ss.upload_msg = ""
-    ss.expl = {}               # AI explanations already received (offline fallbacks are never cached)
+    ss.error = ""
 
 
-def go(page: str, sid: str | None = None):
-    ss.page, ss.sid = page, sid
+def go(page: str):
+    ss.page = page
     st.query_params["page"] = page
-    if sid:
-        st.query_params["sid"] = sid
-    elif "sid" in st.query_params:
-        del st.query_params["sid"]
-
-
-def on_search():
-    if ss.page != "servers":
-        go("servers")
-
-
-def clear_search():
-    ss.search = ""
-
-
-def rerun_comparison():
-    ss.last_run = datetime.now()
-    ss.flash = "Comparison re-run complete"
 
 
 def open_review(fid: str):
@@ -107,21 +88,40 @@ def decide(fid: str, status: str):
     st.rerun()
 
 
-@st.cache_data(ttl=20, show_spinner=False)
-def ai_ready() -> bool:
-    return ollama_ready()
-
-
 def dstatus(fid: str) -> str:
     return ss.decisions.get(fid, {}).get("status", "Pending")
 
 
+def run_comparison(cur_name, cur_bytes, base_name=None, base_bytes=None):
+    try:
+        run = build_run(cur_name, cur_bytes, base_name, base_bytes)
+    except ConfigError as e:
+        ss.error = str(e)
+        return
+    ss.run, ss.error = run, ""
+    a = analyze(run)
+    ss.history.append({"time": run["last_scan"], "name": run["name"], "against": run["base_label"],
+                       "drifts": len(a["findings"]), "high": sum(f["risk"] == "High" for f in a["findings"]),
+                       "score": a["score"]})
+    ss.flash = "Comparison complete"
+    go("findings")
+
+
+def do_compare():
+    cur, base = ss.get("up_cur"), ss.get("up_base")
+    if not cur:
+        ss.error = "Add a current configuration file first."
+        return
+    run_comparison(cur.name, cur.getvalue(), base.name if base else None, base.getvalue() if base else None)
+
+
+def do_sample():
+    sample = json.dumps(get_mock_servers()[0]["current"], indent=2).encode()
+    run_comparison("sample-server.json", sample)
+
+
 # ================================================================= data
-def all_servers():
-    return ss.servers + ([ss.uploaded] if ss.uploaded else [])
-
-
-A = [analyze(s) for s in all_servers()]
+A = [analyze(ss.run)] if ss.run else []
 T = totals(A)
 PENDING = sum(1 for f in T["all"] if dstatus(f["id"]) == "Pending")
 BY_ID = {f["id"]: (f, s) for s in A for f in s["findings"]}
@@ -130,7 +130,7 @@ if ss.get("flash"):
     st.toast(ss.pop("flash"))
 
 
-# ================================================================= table helper
+# ================================================================= helpers
 def table(prefix: str, widths: list, headers: list, rows: list):
     """A styled table made of columns. Each cell is an HTML string or a function that draws widgets."""
     with st.container(key=f"tbl_{prefix}"):
@@ -147,201 +147,121 @@ def table(prefix: str, widths: list, headers: list, rows: list):
                             H(cell)
 
 
-def link_btn(text: str, key: str, page: str, sid: str | None, sub: str = ""):
-    def _draw():
-        st.button(text, key=f"link_{key}", on_click=go, args=(page, sid))
-        if sub:
-            H(f'<span class="key">{esc(sub)}</span>')
-    return _draw
-
-
 def review_btn(fid: str, ctx: str):
     def _draw():
         st.button("Review", key=f"rev_{ctx}_{fid}", on_click=open_review, args=(fid,))
     return _draw
 
 
-# ================================================================= sidebar
-active = "servers" if ss.page == "server" else ss.page
-dyn = (f".st-key-nav_{active} button{{background:#EEF2FF!important;color:#3730A3!important;font-weight:600!important}}")
+def need_run(title: str, msg: str) -> bool:
+    """Empty state for pages that need a comparison. Returns True when there is nothing to show."""
+    if ss.run:
+        return False
+    H(empty_state(title, msg))
+    st.write("")
+    _, mid, _ = st.columns([2, 1.2, 2])
+    mid.button("Start a comparison", key=f"start_{ss.page}", type="primary", on_click=go, args=("compare",))
+    return True
+
+
+# ================================================================= top navigation
+active = ss.page
+dyn = (f".st-key-nav_{active} button{{background:var(--alt)!important;color:var(--ink)!important;font-weight:650!important}}")
 if PENDING:
-    dyn += (f'.st-key-nav_remediation button::after{{content:"{PENDING}";margin-left:auto;background:#4F46E5;color:#fff;'
-            "border-radius:999px;font-size:.72rem;font-weight:600;padding:1px 8px}")
+    dyn += (f'.st-key-nav_remediation button::after{{content:"{PENDING}";margin-left:6px;background:#0071E3;color:#fff;'
+            "border-radius:999px;font-size:.7rem;font-weight:600;padding:0 7px}")
 st.markdown(f"<style>{dyn}</style>", unsafe_allow_html=True)
 
-with st.sidebar:
-    H(BRAND)
-    for key, text, icon in [("overview", "Overview", ":material/space_dashboard:"),
-                            ("servers", "Servers", ":material/dns:"),
-                            ("remediation", "Remediation", ":material/task_alt:"),
-                            ("reports", "Reports & History", ":material/description:")]:
-        st.button(text, key=f"nav_{key}", icon=icon, on_click=go, args=(key,))
-    H(SIDE_NOTE)
-    live = ai_ready()
-    H('<div class="side-ai">Explanations: ' + (f"<b>live AI</b> ({esc(MODEL_NAME)}, local)" if live else
-      f"offline text. Start Ollama and run: ollama pull {esc(MODEL_NAME)}") + "</div>")
-
-# ================================================================= top bar
-with st.container(key="topbar"):
-    c1, c2, c3 = st.columns([5, 1.6, 2.2], vertical_alignment="center")
-    c1.text_input("Search", key="search", placeholder="Search servers, environments, settings…",
-                  label_visibility="collapsed", on_change=on_search, icon=":material/search:")
-    c2.markdown('<div class="reviewer">Reviewer: <b>You</b></div>', unsafe_allow_html=True)
-    c3.button("Re-run comparison", key="rerun", icon=":material/refresh:", type="primary",
-              on_click=rerun_comparison)
-
-try:  # the design needs Streamlit's light theme
-    if st.context.theme.type == "dark":
-        st.warning("For the intended look, run with the light theme: put the .streamlit/config.toml file "
-                   "next to app.py (see instructions), or choose Settings → Theme → Light.")
-except Exception:
-    pass
+with st.container(key="topnav"):
+    cols = st.columns([1.5, 0.95, 0.95, 1.25, 0.95, 3], vertical_alignment="center")
+    cols[0].markdown(BRAND, unsafe_allow_html=True)
+    for col, (key, text) in zip(cols[1:5], NAV):
+        col.button(text, key=f"nav_{key}", on_click=go, args=(key,), use_container_width=True)
+    if ss.run:
+        cols[5].markdown(f'<div class="nav-right">{esc(ss.run["name"])} · {time_ago(ss.run["last_scan"])}</div>',
+                         unsafe_allow_html=True)
 
 
 # ================================================================= pages
-def page_overview():
-    H(page_head("Security overview",
-                f"{len(A)} servers monitored · last comparison {ss.last_run.strftime('%I:%M %p')}"))
-    cols = st.columns(5)
-    cards = [kpi("Servers monitored", str(len(A)), "across prod, staging, dev"),
-             kpi("Healthy vs affected", f'{T["healthy"]} <span class="muted" style="font-weight:500">/</span> {T["affected"]}',
-                 f'{T["healthy"]} clean · {T["affected"]} with drift')]
-    for r in ("High", "Medium", "Low"):
-        n = T["c"][r]
-        cards.append(kpi(f"{r} risk", str(n), "finding" + ("" if n == 1 else "s"), DOT[r]))
-    for c, card in zip(cols, cards):
-        c.markdown(card, unsafe_allow_html=True)
-    st.write("")
+def page_compare():
+    H(hero())
+    left, right = st.columns(2, gap="large")
+    with left:
+        with st.container(key="card_cur"):
+            H(step_head("1", "Current configuration", "Required", "req",
+                        "The file you want to check. Drop in a JSON file or an sshd_config."))
+            st.file_uploader("Current configuration", key="up_cur", label_visibility="collapsed")
+    with right:
+        with st.container(key="card_base"):
+            H(step_head("2", "Baseline", "Optional", "opt",
+                        "What it should look like. Skip it and we use our standard secure baseline."))
+            st.file_uploader("Baseline", key="up_base", label_visibility="collapsed")
 
-    with st.container(key="grid3"):
-        ca, cb, cc = st.columns([1, 1, 1.4])
-        with ca:
-            H('<div class="card center"><div class="card-title">Security posture</div>' + ring(T["posture"]) +
-              '<p class="formula">Average of server scores. Each score = 100 − 15 per High − 7 per Medium − 2 per Low.</p></div>')
-        with cb:
-            leg = "".join(f'<span><i style="background:{DOT[r]}"></i>{r} {T["c"][r]}</span>' for r in ("High", "Medium", "Low"))
-            H('<div class="card center"><div class="card-title">Risk distribution</div>' + donut(T["c"], T["total"]) +
-              f'<div class="legend">{leg}</div></div>')
-        with cc:
-            with st.container(key="card_bars"):
-                H('<div class="card-title" style="margin:0 0 8px">Drifts per server</div>')
-                mx = max([1] + [len(s["findings"]) for s in A])
-                for s in sorted(A, key=lambda s: -len(s["findings"])):
-                    b1, b2, b3 = st.columns([2, 3, 0.4], vertical_alignment="center")
-                    with b1:
-                        link_btn(s["name"], f"bar_{s['id']}", "server", s["id"])()
-                    b2.markdown(stacked_bar(s["findings"], mx), unsafe_allow_html=True)
-                    b3.markdown(f'<div class="bar-n">{len(s["findings"])}</div>', unsafe_allow_html=True)
-    st.write("")
-
-    with st.container(key="card_recent"):
-        H('<div class="card-title" style="margin:0">Recent changes <small>Highest risk first</small></div>')
-        top = sorted(T["all"], key=lambda f: RISK_ORDER[f["risk"]])[:6]
-        if not top:
-            H(empty_clean("Every server matches its approved baseline."))
-        for i, f in enumerate(top):
-            s = BY_ID[f["id"]][1]
-            with st.container(key=f"rrow_{i}"):
-                r1, r2, r3, r4 = st.columns([0.9, 5, 1.1, 0.9], vertical_alignment="center")
-                r1.markdown(risk_badge(f["risk"]), unsafe_allow_html=True)
-                r2.markdown(f'<div><div class="cell-title">{esc(summary(f))}</div>'
-                            f'<div class="cell-sub"><span class="mono">{esc(s["name"])}</span> · detected {time_ago(s["last_scan"])}</div></div>',
-                            unsafe_allow_html=True)
-                r3.markdown(status_badge(dstatus(f["id"])), unsafe_allow_html=True)
-                with r4:
-                    review_btn(f["id"], "ov")()
-
-
-def matches(s: dict, q: str) -> bool:
-    if not q:
-        return True
-    hay = " ".join([s["name"], s["id"], s["environment"], s["os"], s["location"], s["status"]] +
-                   [label(f["setting"]) + " " + f["setting"] for f in s["findings"]]).lower()
-    return all(w in hay for w in q.lower().split())
-
-
-def do_upload():
-    a, b = ss.get("up_base"), ss.get("up_cur")
-    if not a or not b:
-        ss.upload_msg = "Please choose both files: the approved baseline and the current one."
-        return
-    try:
-        base, cur = parse_uploaded(a.getvalue()), parse_uploaded(b.getvalue())
-    except ValueError as e:
-        ss.upload_msg = str(e)
-        return
-    ss.uploaded = dict(id="uploaded", name="uploaded-config", environment="dev", os="Not specified",
-                       location="Local upload", status="unknown", last_scan=datetime.now(),
-                       baseline=base, current=cur)
-    ss.upload_msg = ""
-    ss.flash = "Comparison complete"
-    go("server", "uploaded")
-
-
-def page_servers():
-    H(page_head("Servers", "Select a server to inspect its configuration changes."))
-    f1, f2, f3, f4 = st.columns([1, 1, 1, 2], vertical_alignment="bottom")
-    env = f1.selectbox("Environment", ["All", "Prod", "Staging", "Dev"], key="f_env")
-    stat = f2.selectbox("Status", ["All", "Online", "Offline", "Unknown"], key="f_status")
-    rk = f3.selectbox("Highest risk", ["All", "High", "Medium", "Low", "Clean"], key="f_risk")
-    if ss.get("search"):
-        f4.button(f"Search: {ss.search}  ✕", key="clear_search", on_click=clear_search)
-
-    q = ss.get("search", "").strip()
-    rows = [s for s in A if matches(s, q)
-            and (env == "All" or s["environment"] == env.lower())
-            and (stat == "All" or s["status"] == stat.lower())
-            and (rk == "All" or s["highest"] == ("None" if rk == "Clean" else rk))]
-    if not rows:
-        H('<div class="card">' + empty("No servers match", "Try clearing the search or filters.") + "</div>")
+    cur, base = ss.get("up_cur"), ss.get("up_base")
+    if cur and base:
+        H(ready_line(f"<b>{esc(cur.name)}</b> will be compared with your baseline <b>{esc(base.name)}</b>", True))
+    elif cur:
+        H(ready_line(f"<b>{esc(cur.name)}</b> will be checked against the <b>standard secure baseline</b>", True))
     else:
-        table("servers", [2.2, 1.1, 1.8, 1.2, 1.1, 0.8, 1.3],
-              ["Server", "Environment", "OS", "Status", "Last scan", "Drifts", "Highest risk"],
-              [[link_btn(s["name"], f"srv_{s['id']}", "server", s["id"], s["location"]),
-                f'<span class="pill">{esc(s["environment"])}</span>', esc(s["os"]), status_dot(s["status"]),
-                time_ago(s["last_scan"]), f'<b>{len(s["findings"])}</b>', risk_badge(s["highest"])] for s in rows])
+        H(ready_line("Add a current configuration to begin", False))
+
+    if ss.error:
+        _, mid, _ = st.columns([1, 3, 1])
+        mid.error(ss.error)
+
+    _, b1, b2, _ = st.columns([2, 1.3, 1.3, 2], vertical_alignment="center")
+    b1.button("Compare", key="do_compare", type="primary", disabled=not cur, on_click=do_compare,
+              use_container_width=True)
+    b2.button("Try sample data", key="do_sample", type="tertiary", on_click=do_sample, use_container_width=True)
 
     st.write("")
-    with st.container(key="card_upload"):
-        H('<div class="card-title" style="margin:0">Compare your own files</div>')
-        st.caption("Upload an approved baseline and a current file to run the same comparison on your data. "
-                   "Use two JSON files (flat key/value settings) or two sshd_config files. Files stay on this machine.")
-        u1, u2, u3 = st.columns([2, 2, 1], vertical_alignment="bottom")
-        u1.file_uploader("Baseline (approved)", key="up_base")
-        u2.file_uploader("Current (observed)", key="up_cur")
-        u3.button("Compare files", type="primary", on_click=do_upload, key="do_upload")
-        if ss.upload_msg:
-            st.error(ss.upload_msg)
+    with st.expander("What is the standard baseline?"):
+        st.caption("Used only when you don't upload a baseline. Only settings that exist in your file are checked.")
+        H(baseline_table())
+    H(features())
 
 
-def page_server():
-    s = next((x for x in A if x["id"] == ss.sid), None)
-    if not s:
-        H('<div class="card">' + empty("Server not found", "Go back to the Servers page and pick one.") + "</div>")
-        st.button("← All servers", on_click=go, args=("servers",), key="back_nf")
+def page_findings():
+    if need_run("No results yet", "Upload a configuration on the Compare page and your findings will appear here."):
         return
-    st.button("← All servers", on_click=go, args=("servers",), key="back")
-    n = len(s["findings"])
-    H(f'<div class="card" style="margin:6px 0 14px"><div class="server-head"><h1>{esc(s["name"])} {risk_badge(s["highest"])}</h1>'
-      f'<div class="muted">{n} drift{"" if n == 1 else "s"} · score {s["score"]}/100</div></div>'
-      '<dl class="meta">'
-      f'<div><dt>Environment</dt><dd style="text-transform:capitalize">{esc(s["environment"])}</dd></div>'
-      f'<div><dt>Operating system</dt><dd>{esc(s["os"])}</dd></div>'
-      f'<div><dt>Location</dt><dd>{esc(s["location"])}</dd></div>'
-      f'<div><dt>Status</dt><dd>{status_dot(s["status"])}</dd></div>'
-      f'<div><dt>Last scan</dt><dd>{fmt_date(s["last_scan"])} ({time_ago(s["last_scan"])})</dd></div></dl></div>')
+    s = A[0]
+    h1, h2 = st.columns([5, 1.2], vertical_alignment="bottom")
+    h1.markdown(result_head(s["name"], s["kind"], s["base_label"], fmt_date(s["last_scan"])), unsafe_allow_html=True)
+    h2.button("New comparison", key="new_cmp", on_click=go, args=("compare",), use_container_width=True)
 
-    t_explorer, t_summary, t_raw = st.tabs(["Drift explorer", "Summary", "Raw JSON"])
+    ca, cb = st.columns([1, 2.3], gap="large")
+    with ca:
+        with st.container(key="card_ring"):
+            H('<div class="center"><div class="card-title">Security posture</div>' + ring(s["score"]) +
+              '<p class="formula">100 − 15 per High − 7 per Medium − 2 per Low</p></div>')
+    with cb:
+        with st.container(key="card_verdict"):
+            H(verdict(s["findings"], len(s["baseline"])))
+    st.write("")
 
-    with t_explorer:
+    if s["mode"] == "standard":
+        extra = ""
+        if s["not_covered"]:
+            extra += (f'<b>{len(s["not_covered"])}</b> setting{"" if len(s["not_covered"]) == 1 else "s"} in your file '
+                      f'aren\'t covered by the standard baseline and were left out. ')
+        extra += "Upload your own baseline to compare everything."
+        H(f'<div class="note"><b>Checked {len(s["baseline"])} of {len(STANDARD_BASELINE)} standard settings.</b> {extra}</div>')
+        if s["not_covered"]:
+            with st.expander("Settings that weren't checked"):
+                st.write(", ".join(f"`{k}`" for k in s["not_covered"]))
+        st.write("")
+
+    t_find, t_raw = st.tabs(["Findings", "Raw data"])
+    with t_find:
         e1, e2, e3, _ = st.columns([1, 1, 1.6, 2], vertical_alignment="bottom")
         xr = e1.selectbox("Risk", ["All", "High", "Medium", "Low"], key="x_risk")
         xt = e2.selectbox("Change", ["All", "Modified", "Added", "Removed"], key="x_type")
         xu = e3.checkbox("Show unchanged settings", key="x_unch")
         keys = list(dict.fromkeys(list(s["baseline"]) + list(s["current"])))
         fmap = {f["setting"]: f for f in s["findings"]}
+        ordered = sorted(keys, key=lambda k: RISK_ORDER[fmap[k]["risk"]] if k in fmap else 9)
         rows = []
-        for k in keys:
+        for k in ordered:
             f = fmap.get(k)
             if not f and not xu:
                 continue
@@ -358,68 +278,58 @@ def page_server():
                          review_btn(f["id"], "ex") if f else ""])
         if rows:
             table("explorer", [2.2, 1.6, 1.6, 1.1, 1, 1.1, 1],
-                  ["Setting", "Baseline (approved)", "Current (observed)", "Change", "Risk", "Review", ""], rows)
+                  ["Setting", "Baseline", "Current", "Change", "Risk", "Decision", ""], rows)
         elif not s["findings"] and xr == "All" and xt == "All":
-            H('<div class="card">' + empty_clean("This server matches its approved baseline.") + "</div>")
+            H(empty_clean("Everything matches the baseline."))
         else:
-            H('<div class="card">' + empty("No settings match these filters") + "</div>")
-
-    with t_summary:
-        c = {r: sum(1 for f in s["findings"] if f["risk"] == r) for r in ("High", "Medium", "Low")}
-        mini = "".join(f'<div class="mini"><span class="dot" style="background:{DOT[r]}"></span><b>{c[r]}</b>'
-                       f'<span class="muted">{r}</span></div>' for r in c)
-        H(f'<div class="mini-row">{mini}<div class="mini"><span class="muted">Posture score</span>'
-          f'<b>{s["score"]}</b><span class="muted">/ 100</span></div></div>')
-        if not s["findings"]:
-            H('<div class="card">' + empty_clean("This server matches its approved baseline.") + "</div>")
-        else:
-            table("summary", [1, 5, 1.2, 1], ["Risk", "Finding", "Review", ""],
-                  [[risk_badge(f["risk"]),
-                    f'<div><div class="cell-title">{esc(summary(f))}</div><div class="cell-sub">{TYPE_LABEL[f["type"]]} setting · '
-                    f'<span class="mono">{esc(f["setting"])}</span></div></div>',
-                    status_badge(dstatus(f["id"])), review_btn(f["id"], "sm")] for f in s["findings"]])
+            H(empty("No settings match these filters"))
 
     with t_raw:
         r1, r2 = st.columns(2)
-        r1.markdown('<div class="code-title">baseline.json <span class="muted">· approved</span></div>' +
+        base_title = "baseline" if s["mode"] == "custom" else "standard baseline"
+        r1.markdown(f'<div class="code-title">{base_title} <span class="muted">· approved</span></div>' +
                     raw_json(s["baseline"], s["findings"]), unsafe_allow_html=True)
-        r2.markdown('<div class="code-title">current.json <span class="muted">· observed</span></div>' +
+        r2.markdown(f'<div class="code-title">{esc(s["name"])} <span class="muted">· observed</span></div>' +
                     raw_json(s["current"], s["findings"]), unsafe_allow_html=True)
-        H('<p class="hint">Highlighted lines differ from the baseline.</p>')
+        H('<p class="hint">Highlighted lines differ from the baseline. SSH files are shown as normalised settings.</p>')
 
 
 def page_remediation():
-    H(page_head("Remediation", "Review proposed fixes. Approving records your decision only; nothing is changed on any server."))
+    H('<div class="res-head"><div class="eyebrow">Remediation</div><h1 style="font-family:inherit">Review proposed fixes</h1>'
+      '<p class="sub muted" style="margin-top:8px">Approving records your decision only. Nothing is changed on any server.</p></div>')
+    if need_run("Nothing to review yet", "Once a comparison finds drift, proposed fixes will be listed here."):
+        return
     n = {"Pending": 0, "Approved": 0, "Rejected": 0}
     for f in T["all"]:
         n[dstatus(f["id"])] += 1
     H('<div class="mini-row">' + "".join(f'<div class="mini"><b>{v}</b><span class="muted">{k}</span></div>'
                                           for k, v in n.items()) + "</div>")
+    if not T["all"]:
+        H(empty_clean("There are no findings to remediate."))
+        return
     flt = st.selectbox("Status", ["All", "Pending", "Approved", "Rejected"], key="f_rem")
     order = {"Pending": 0, "Approved": 1, "Rejected": 2}
-    rows = [(f, s) for f in T["all"] for s in [BY_ID[f["id"]][1]] if flt == "All" or dstatus(f["id"]) == flt]
-    rows.sort(key=lambda fs: (order[dstatus(fs[0]["id"])], RISK_ORDER[fs[0]["risk"]]))
+    rows = [f for f in T["all"] if flt == "All" or dstatus(f["id"]) == flt]
+    rows.sort(key=lambda f: (order[dstatus(f["id"])], RISK_ORDER[f["risk"]]))
     if not rows:
-        H('<div class="card">' + empty("Nothing to show", "No findings match this status.") + "</div>")
+        H(empty("Nothing to show", "No findings match this status."))
         return
     out = []
-    for f, s in rows:
+    for f in rows:
         d = ss.decisions.get(f["id"], {})
-        out.append([link_btn(s["name"], f"rem_{f['id']}", "server", s["id"]),
-                    f'{esc(label(f["setting"]))}<span class="key">{esc(f_expected(f))} → {esc(f_actual(f))}</span>',
+        out.append([f'{esc(label(f["setting"]))}<span class="key">{esc(f_expected(f))} → {esc(f_actual(f))}</span>',
                     risk_badge(f["risk"]), status_badge(dstatus(f["id"])), esc(d.get("by", "—")),
                     fmt_date(d["at"]) if d.get("at") else "—",
                     f'<span class="muted">{esc(d.get("note") or "—")}</span>', review_btn(f["id"], "rem")])
-    table("rem", [1.6, 2.2, 1, 1.1, 0.9, 1.4, 2, 1],
-          ["Server", "Setting", "Risk", "Status", "Decided by", "When", "Note", ""], out)
+    table("rem", [2.4, 1, 1.1, 0.9, 1.4, 2, 1], ["Setting", "Risk", "Status", "Decided by", "When", "Note", ""], out)
 
 
 def print_report_html() -> str:
     parts = [f'<div class="print-report"><h1>Configuration Drift Report</h1><p>Generated {datetime.now():%d %b %Y, %I:%M %p} · '
-             f'{len(A)} servers · {T["total"]} drifts (High {T["c"]["High"]}, Medium {T["c"]["Medium"]}, Low {T["c"]["Low"]}) '
+             f'{T["total"]} drifts (High {T["c"]["High"]}, Medium {T["c"]["Medium"]}, Low {T["c"]["Low"]}) '
              f'· posture {T["posture"]}/100</p>']
     for s in A:
-        parts.append(f'<h2>{esc(s["name"])} · {esc(s["environment"])} · {"Clean" if s["highest"] == "None" else s["highest"]}</h2>')
+        parts.append(f'<h2>{esc(s["name"])} vs {esc(s["base_label"])}</h2>')
         if s["findings"]:
             parts.append("<table><thead><tr><th>Setting</th><th>Change</th><th>Expected</th><th>Actual</th><th>Risk</th><th>Status</th></tr></thead><tbody>" +
                          "".join(f'<tr><td>{esc(label(f["setting"]))}</td><td>{TYPE_LABEL[f["type"]]}</td><td>{esc(f_expected(f))}</td>'
@@ -432,7 +342,10 @@ def print_report_html() -> str:
 
 
 def page_reports():
-    H(page_head("Reports & history", "Export the current findings and compare with earlier scans."))
+    H('<div class="res-head"><div class="eyebrow">Reports</div><h1 style="font-family:inherit">Export and history</h1>'
+      '<p class="sub muted" style="margin-top:8px">Download the current findings and review earlier comparisons from this session.</p></div>')
+    if need_run("No reports yet", "Run a comparison first, then export it here as JSON, CSV or PDF."):
+        return
     with st.container(key="card_download"):
         H('<div class="card-title" style="margin:0">Download report</div>')
         st.caption("Includes every finding, its risk, and your approval decisions.")
@@ -444,41 +357,26 @@ def page_reports():
         if d3.button("Print / save as PDF", icon=":material/print:", key="print_btn"):
             ss.do_print = True
     st.write("")
-    pts = history_points(ss.history, A)
-    left, right = st.columns(2)
-    with left:
-        H('<div class="card"><div class="card-title">Drift trend <small>Total drifts per scan</small></div>' + trend(pts) + "</div>")
-    with right:
-        body = "".join(
-            f'<tr><td>{fmt_date(p["time"])}{' <span class="badge s-Approved">Current</span>' if i == 0 else ""}</td>'
-            f'<td class="num">{p["servers"]}</td><td class="num"><b>{p["drifts"]}</b></td><td class="num">{p["high"]}</td></tr>'
-            for i, p in enumerate(reversed(pts)))
-        H('<div class="card"><div class="card-title">Scan history</div><div class="table-wrap" style="box-shadow:none"><table>'
-          '<thead><tr><th>Scan time</th><th class="num">Servers</th><th class="num">Drifts</th><th class="num">High</th></tr></thead>'
-          f"<tbody>{body}</tbody></table></div></div>")
+    body = "".join(
+        f'<tr><td>{fmt_date(p["time"])}</td><td><span class="mono">{esc(p["name"])}</span></td><td>{esc(p["against"])}</td>'
+        f'<td class="num"><b>{p["drifts"]}</b></td><td class="num">{p["high"]}</td><td class="num">{p["score"]}</td></tr>'
+        for p in reversed(ss.history))
+    H('<div class="card-title">Comparisons this session</div><div class="table-wrap"><table>'
+      '<thead><tr><th>Time</th><th>File</th><th>Compared with</th><th class="num">Drifts</th><th class="num">High</th>'
+      f'<th class="num">Score</th></tr></thead><tbody>{body}</tbody></table></div>')
+    if len(ss.history) > 1:
+        st.write("")
+        with st.container(key="card_trend"):
+            H('<div class="card-title">Drift trend <small>Total drifts per comparison</small></div>' + trend(ss.history))
     st.markdown(print_report_html(), unsafe_allow_html=True)
     if ss.pop("do_print", False):
         components.html("<script>window.parent.print()</script>", height=0)
 
 
 # ================================================================= review drawer
-def get_explanation(f: dict) -> dict:
-    """Backend AI explanation, remembered for this session. Offline fallbacks are not remembered,
-    so starting Ollama later makes the next click use the AI."""
-    key = json.dumps([f["id"], f["expected"], f["actual"]], default=str)
-    if "expl" not in ss:
-        ss.expl = {}
-    if key not in ss.expl:
-        exp = explain({k: f.get(k) for k in ("setting", "type", "expected", "actual", "risk", "score", "reason")})
-        if not exp.get("ai_text"):
-            return exp
-        ss.expl[key] = exp
-    return ss.expl[key]
-
-
-def ai_html(text: str) -> str:
-    """AI text -> safe HTML: no markdown stars, line breaks kept."""
-    return rich(re.sub(r"\*\*", "", text).strip()).replace("\n", "<br>")
+@st.cache_data(show_spinner=False)
+def cached_explanation(f: dict) -> dict:
+    return explain(f)
 
 
 @st.dialog("Finding details", width="large")
@@ -488,8 +386,8 @@ def review_dialog(fid: str):
         st.write("This finding is no longer available.")
         return
     f, s = hit
-    with st.spinner("Loading explanation… (the local AI can take a few seconds)"):
-        exp = get_explanation(f)
+    with st.spinner("Loading explanation…"):
+        exp = cached_explanation({k: f[k] for k in ("setting", "type", "expected", "actual", "risk")})
     d = ss.decisions.get(fid)
     e_chip, a_chip = finding_chips(f)
     after = '<span class="chip none">remove setting</span>' if f["type"] == "added" else e_chip
@@ -503,12 +401,8 @@ def review_dialog(fid: str):
       f'<div class="evidence"><div class="box"><div class="lbl">Now</div>{a_chip}</div><div class="arr">→</div>'
       f'<div class="box"><div class="lbl">After fix</div>{after}</div></div>'
       '<p class="hint">Proposed state only. Nothing is changed on the server.</p>'
-      + (f'<p class="hint">Rule score {f["score"]}/100. {esc(f["reason"])}</p>' if f.get("score") is not None else "")
-      + f'<div class="sec">Explanation<span class="tag tag-ai">{esc(exp["source"])}</span></div>'
-      + (f'<div class="exp-block"><h4>AI explanation</h4><p>{ai_html(exp["ai_text"])}</p></div>'
-         '<div class="sec">Standard guidance<span class="tag tag-rule">Rule-based text</span></div>'
-         if exp.get("ai_text") else "")
-      + f'<div class="exp-block"><h4>Why it matters</h4><p>{rich(exp["why_it_matters"])}</p></div>'
+      f'<div class="sec">Explanation<span class="tag tag-ai">{esc(exp["source"])}</span></div>'
+      f'<div class="exp-block"><h4>Why it matters</h4><p>{rich(exp["why_it_matters"])}</p></div>'
       f'<div class="exp-block"><h4>Impact</h4><p>{rich(exp["impact"])}</p></div>'
       f'<div class="exp-block"><h4>Suggested fix</h4><div class="fixbox">{rich(exp["suggested_fix"])}</div></div>')
     st.divider()
@@ -531,8 +425,8 @@ def review_dialog(fid: str):
 
 
 # ================================================================= router
-{"overview": page_overview, "servers": page_servers, "server": page_server,
- "remediation": page_remediation, "reports": page_reports}.get(ss.page, page_overview)()
+{"compare": page_compare, "findings": page_findings, "remediation": page_remediation,
+ "reports": page_reports}.get(ss.page, page_compare)()
 H(FOOTER)
 
 rid = ss.pop("review_id", None)

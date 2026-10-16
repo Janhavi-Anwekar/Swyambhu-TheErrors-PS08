@@ -1,41 +1,15 @@
+# Current (observed) SSH server configuration
 
-# Simulated SSH server configuration for testing
-
-Port 22
-AddressFamily any
-ListenAddress 0.0.0.0
-
+Port 22   # standard port
 PermitRootLogin yes
 PasswordAuthentication yes
 PubkeyAuthentication yes
-PermitEmptyPasswords no
-
-KbdInteractiveAuthentication yes
-ChallengeResponseAuthentication yes
-UsePAM yes
-
-MaxAuthTries 10
-MaxSessions 10
-LoginGraceTime 120
+# PermitEmptyPasswords is missing on purpose
+MaxAuthTries 6
 StrictModes yes
-
 X11Forwarding yes
-AllowAgentForwarding yes
-AllowTcpForwarding yes
-GatewayPorts yes
-PermitTunnel yes
-PermitUserRC yes
-
-ClientAliveInterval 0
-ClientAliveCountMax 3
-IgnoreRhosts no
-HostbasedAuthentication no
-
-SyslogFacility AUTH
 LogLevel INFO
+ClientAliveInterval 300
+IgnoreRhosts yes
 
-# Additional configuration directives
-PrintMotd yes
-PrintLastLog yes
-TCPKeepAlive yes
 Compression yes
