@@ -13,7 +13,7 @@ import streamlit.components.v1 as components
 
 from core import (RISK_ORDER, TYPE_LABEL, analyze, f_actual, f_expected, history_points, label,
                   report_csv, report_data, summary, totals)
-from data import get_backend_servers, get_mock_history, get_mock_servers, parse_uploaded
+from data import get_history, get_servers, parse_uploaded
 from explain import MODEL_NAME, explain, ollama_ready
 from ui import (BRAND, CSS, DOT, FOOTER, SIDE_NOTE, chip, donut, empty, empty_clean, esc, finding_chips,
                 fmt_date, kpi, page_head, raw_json, rich, ring, risk_badge, stacked_bar, status_badge,
@@ -56,8 +56,8 @@ if "ready" not in ss:
     qp_page = st.query_params.get("page", "overview")
     ss.page = qp_page if qp_page in PAGES else "overview"
     ss.sid = st.query_params.get("sid")
-    ss.servers = get_mock_servers() + get_backend_servers()   # delete the mock part for real data only
-    ss.history = get_mock_history()
+    ss.servers = get_servers()   # real files only; set USE_DEMO_DATA = True in data.py for the demo fleet
+    ss.history = get_history()
     ss.uploaded = None
     ss.decisions = load_decisions()
     ss.last_run = datetime.now()

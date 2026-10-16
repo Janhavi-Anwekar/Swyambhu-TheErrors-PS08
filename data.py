@@ -13,6 +13,10 @@ from ssh_parser import parse_ssh_config   # backend: reads an sshd_config file -
 
 ROOT = Path(__file__).parent
 
+# False = the dashboard shows only real files (backend sample files + uploads).
+# True  = also show the 6 made-up demo servers and fake scan history.
+USE_DEMO_DATA = False
+
 BASE = {
     "firewall_enabled": True, "ssh_password_login": False, "ssh_root_login": False,
     "open_ports": [22, 443], "password_min_length": 12, "auto_updates": True,
@@ -119,3 +123,13 @@ def parse_uploaded(raw: bytes) -> dict:
     if not settings:
         raise ValueError("No settings found. Upload a JSON object or an sshd_config style file.")
     return settings
+
+
+def get_servers() -> list[dict]:
+    """Servers the dashboard starts with."""
+    return (get_mock_servers() if USE_DEMO_DATA else []) + get_backend_servers()
+
+
+def get_history() -> list[dict]:
+    """Past scans for the trend chart. Only demo data exists, so it is empty when the demo is off."""
+    return get_mock_history() if USE_DEMO_DATA else []

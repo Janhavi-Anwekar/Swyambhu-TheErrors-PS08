@@ -1,0 +1,160 @@
+{
+    "scan_type": "SSH configuration",
+    "scan_time": "2026-10-16T12:45:06+05:30",
+    "total_drift_findings": 25,
+    "findings": [
+        {
+            "setting": "permitrootlogin",
+            "expected": "no",
+            "actual": "yes",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "passwordauthentication",
+            "expected": "no",
+            "actual": "yes",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "maxauthtries",
+            "expected": "4",
+            "actual": "10",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "logingracetime",
+            "expected": "30",
+            "actual": "120",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "x11forwarding",
+            "expected": "no",
+            "actual": "yes",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "allowagentforwarding",
+            "expected": "no",
+            "actual": "yes",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "allowtcpforwarding",
+            "expected": "no",
+            "actual": "yes",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "gatewayports",
+            "expected": "no",
+            "actual": "yes",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "permittunnel",
+            "expected": "no",
+            "actual": "yes",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "permituserrc",
+            "expected": "no",
+            "actual": "yes",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "clientaliveinterval",
+            "expected": "300",
+            "actual": "0",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "clientalivecountmax",
+            "expected": "2",
+            "actual": "3",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "ignorerhosts",
+            "expected": "yes",
+            "actual": "no",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "loglevel",
+            "expected": "VERBOSE",
+            "actual": "INFO",
+            "status": "CHANGED"
+        },
+        {
+            "setting": "port",
+            "expected": "NOT IN BASELINE",
+            "actual": "22",
+            "status": "NEW_SETTING"
+        },
+        {
+            "setting": "addressfamily",
+            "expected": "NOT IN BASELINE",
+            "actual": "any",
+            "status": "NEW_SETTING"
+        },
+        {
+            "setting": "listenaddress",
+            "expected": "NOT IN BASELINE",
+            "actual": "0.0.0.0",
+            "status": "NEW_SETTING"
+        },
+        {
+            "setting": "kbdinteractiveauthentication",
+            "expected": "NOT IN BASELINE",
+            "actual": "yes",
+            "status": "NEW_SETTING"
+        },
+        {
+            "setting": "challengeresponseauthentication",
+            "expected": "NOT IN BASELINE",
+            "actual": "yes",
+            "status": "NEW_SETTING"
+        },
+        {
+            "setting": "usepam",
+            "expected": "NOT IN BASELINE",
+            "actual": "yes",
+            "status": "NEW_SETTING"
+        },
+        {
+            "setting": "syslogfacility",
+            "expected": "NOT IN BASELINE",
+            "actual": "AUTH",
+            "status": "NEW_SETTING"
+        },
+        {
+            "setting": "printmotd",
+            "expected": "NOT IN BASELINE",
+            "actual": "yes",
+            "status": "NEW_SETTING"
+        },
+        {
+            "setting": "printlastlog",
+            "expected": "NOT IN BASELINE",
+            "actual": "yes",
+            "status": "NEW_SETTING"
+        },
+        {
+            "setting": "tcpkeepalive",
+            "expected": "NOT IN BASELINE",
+            "actual": "yes",
+            "status": "NEW_SETTING"
+        },
+        {
+            "setting": "compression",
+            "expected": "NOT IN BASELINE",
+            "actual": "yes",
+            "status": "NEW_SETTING"
+        }
+    ],
+    "baseline_warnings": [],
+    "current_warnings": [],
+    "ai_explanation": "- **PermitRootLogin**: Enabling root login can allow unauthorized access, increasing the risk of a security breach. **Fix**: Change to `no` to prevent root login.\n- **PasswordAuthentication**: Allowing password authentication without a strong password policy can lead to unauthorized access. **Fix**: Change to `no` to enforce more secure authentication methods.\n- **MaxAuthTries**: Increasing the number of authentication tries can make brute force attacks more successful. **Fix**: Change to `4` to limit the number of authentication attempts to prevent brute force attacks."
+}
