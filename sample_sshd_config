@@ -1,0 +1,5 @@
+
+# Sample SSH configuration for testing
+PermitRootLogin no
+PasswordAuthentication yes
+PubkeyAuthentication yes

@@ -1,0 +1,7 @@
+
+{
+  "firewall_enabled": true,
+  "logging_enabled": true,
+  "security_updates": true,
+  "ssh_password_login": false
+}
