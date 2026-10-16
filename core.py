@@ -29,10 +29,37 @@ TYPE_LABEL = {"modified": "Modified", "added": "Added", "removed": "Removed", "s
 
 # Used ONLY when the user does not upload a baseline.
 STANDARD_BASELINE = {
-    "firewall_enabled": True, "ssh_password_login": False, "ssh_root_login": False,
-    "permit_empty_passwords": False, "x11_forwarding": False, "max_auth_tries": 4,
-    "open_ports": [22, 443], "password_min_length": 12, "auto_updates": True,
-    "log_level": "info", "telnet_enabled": False,
+        # Network security
+    "firewall_enabled": True,
+    "open_ports": [22, 443],
+    "telnet_enabled": False,
+
+    # SSH authentication
+    "ssh_password_login": False,
+    "ssh_root_login": False,
+    "permit_empty_passwords": False,
+    "max_auth_tries": 4,
+    "password_min_length": 12,
+    "pubkey_authentication": True,
+    "strict_modes": True,
+    "ignore_rhosts": True,
+
+    # SSH connection and forwarding
+    "x11_forwarding": False,
+    "allow_tcp_forwarding": False,
+    "client_alive_interval": 300,
+    "client_alive_count_max": 3,
+    "compression": False,
+
+    # System maintenance
+    "auto_updates": True,
+
+    # Logging
+    "log_level": "info",
+
+    # SSH server configuration
+    "port": 22,
+    "protocol": 2,
 }
 
 

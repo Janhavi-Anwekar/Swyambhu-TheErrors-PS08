@@ -251,6 +251,32 @@ def page_findings():
                 st.write(", ".join(f"`{k}`" for k in s["not_covered"]))
         st.write("")
 
+    # Informational section: current settings that do not exist in the uploaded baseline.
+    # These are not classified as vulnerabilities; they are simply not comparable.
+    if s["mode"] == "custom":
+        current_only = [(k, value) for k, value in s["current"].items() if k not in s["baseline"]]
+        if current_only:
+            H('<div class="card-title">Configurations Not Available in Baseline</div>')
+            st.caption(
+                "These settings are present in the current configuration but do not exist "
+                "in the uploaded baseline, so they are not available for comparison. "
+                "They are listed for information only and are not automatically marked as risky."
+            )
+            info_rows = []
+            for setting, value in current_only:
+                info_rows.append([
+                    f'{esc(label(setting))}<span class="key">{esc(setting)}</span>',
+                    chip(value, "", True),
+                    '<span class="muted">Not available to compare with baseline.</span>',
+                ])
+            table(
+                "current_only",
+                [2, 1.2, 2.5],
+                ["Setting", "Current value", "Comparison status"],
+                info_rows,
+            )
+            st.write("")
+
     t_find, t_raw = st.tabs(["Findings", "Raw data"])
     with t_find:
         e1, e2, e3, _ = st.columns([1, 1, 1.6, 2], vertical_alignment="bottom")

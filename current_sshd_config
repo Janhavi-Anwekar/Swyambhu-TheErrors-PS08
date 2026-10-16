@@ -5,7 +5,7 @@ PermitRootLogin yes
 PasswordAuthentication no
 PubkeyAuthentication yes
 # PermitEmptyPasswords is missing on purpose
-MaxAuthTries 6
+MaxAuthTries 4
 StrictModes yes
 X11Forwarding yes
 LogLevel INFO
